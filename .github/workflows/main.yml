@@ -1,0 +1,96 @@
+name: CI/CD Pipeline for cloud resume challenge
+
+on:
+  push:
+    branches:
+      - main
+  
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      AWS_SAM_STACK_NAME: crc
+      AWS_DEFAULT_REGION: ap-southeast-2  # Set your AWS region to ap-southeast-2
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}  # Use GitHub Secrets for AWS Access Key
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}  # Use GitHub Secrets for AWS Secret Key
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Print working directory and list files
+        run: |
+          pwd
+          ls -la
+
+      - name: Install Python 3.9  # Install Python 3.9 for SAM build
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install AWS CLI and SAM CLI
+        run: |
+          pip install awscli
+          pip install aws-sam-cli
+        working-directory: ./crc  # Set working directory to 'crc'
+
+      - name: Build SAM application
+        run: |
+          sam build
+        working-directory: ./crc  # Set working directory to 'crc'
+
+      - name: Deploy SAM application
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ap-southeast-2
+        run: |
+          sam deploy --template-file template.yaml --stack-name crc --capabilities CAPABILITY_IAM || \
+          if [ $? -eq 1 ]; then echo "No changes to deploy"; exit 0; else exit 1; fi
+        working-directory: ./crc  # Set working directory to 'crc'
+
+      - name: Sync files to S3 bucket
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ap-southeast-2
+        run: |
+          aws s3 sync ./www s3://andrewdavis-crc-website
+        working-directory: ./crc
+
+  test:
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      AWS_SAM_STACK_NAME: crc
+      AWS_DEFAULT_REGION: ap-southeast-2  # Set your AWS region to ap-southeast-2
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}  # Use GitHub Secrets for AWS Access Key
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}  # Use GitHub Secrets for AWS Secret Key
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Print working directory and list files
+        run: |
+          pwd
+          ls -la
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+        
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+        working-directory: ./crc  # Set working directory to 'crc'
+
+      - name: Run tests
+        run: pytest
+        working-directory: ./crc  # Set working directory to 'crc'
