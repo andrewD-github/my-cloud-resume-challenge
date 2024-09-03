@@ -1,0 +1,269 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: >
+  SAM Stack for Cloud Resume Challenge
+  #------------------------------------------------------------------------------------------------------------------------
+  #                       Useful Commands:
+  #------------------------------------------------------------------------------------------------------------------------
+  # in C:\Users\andrew\source\repos\c-loud-resume-challenge\crc\ 
+  # sam build
+  # aws-vault exec Andrew --no-session -- sam deploy
+  # aws-vault exec Andrew -- aws s3 ls
+  # aws-vault exec Andrew --no-session -- aws s3 sync .\www s3://andrewdavis-crc-website
+  #-----------------------------------------------------------------------------------------------------------------------
+
+  # More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 3
+    MemorySize: 128
+
+Resources:
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: cloud-resume-challenge
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: "RecordID"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "RecordID"
+          KeyType: "HASH"
+  # S3 Bucket to host the static website (commented out)
+  # WebsiteBucket:
+  #   Type: 'AWS::S3::Bucket'
+  #   Properties:
+  #     OwnershipControls:
+  #       Rules:
+  #         - ObjectOwnership: ObjectWriter
+  #     WebsiteConfiguration:
+  #       IndexDocument: index.html
+  #     BucketName: 'andrewdavis-crc-website'
+
+  # S3 Bucket Policy (commented out as we set the policy later when creating cloudfront)
+  # SetS3BucketPolicy:
+  #   Type: 'AWS::S3::BucketPolicy'
+  #   Properties:
+  #     Bucket: !Ref WebsiteBucket
+  #     PolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Action: 's3:GetObject'
+  #           Effect: 'Allow'
+  #           Principal: '*'
+  #           Resource: !Join
+  #             - ""
+  #             - - "arn:aws:s3:::"
+  #               - !Ref WebsiteBucket
+  #               - /*
+
+  ## Route 53 Hosted Zone (commented out)
+  # WebsiteHostedZone:
+  #   Type: 'AWS::Route53::HostedZone'
+  #   Properties:
+  #     Name: 'andrewdavis.link'
+
+
+  # ACM Certificate for HTTPS (commented out)
+ # WebsiteCertificate:
+ #   Type: 'AWS::CertificateManager::Certificate'
+ #   Properties:
+ #     DomainName: 'andrewdavis.link'
+ #     SubjectAlternativeNames:
+ #       - 'www.andrewdavis.link'
+ #     DomainValidationOptions:
+ #       - DomainName: 'andrewdavis.link'
+ #         HostedZoneId: 'Z05488053ORROGX0KIWSR' # hardcoded for test
+ #       - DomainName: 'www.andrewdavis.link'
+ #         HostedZoneId: 'Z05488053ORROGX0KIWSR' # hardcoded for test
+ #     ValidationMethod: 'DNS'
+
+  # CloudFront Distribution
+
+  # Create Origin Access Identity for CloudFront
+  CloudFrontOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: "OAI for accessing S3 bucket only through CloudFront"
+
+  WebsiteDistribution:
+    Type: 'AWS::CloudFront::Distribution'
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: 'index.html'
+        Origins:
+          - DomainName: andrewdavis-crc-website.s3.amazonaws.com # Change to S3 bucket domain name
+            Id: andrewdavis-crc-website
+            S3OriginConfig:  # Use S3OriginConfig for S3 bucket
+              OriginAccessIdentity: !Sub 'origin-access-identity/cloudfront/${CloudFrontOriginAccessIdentity}'  # Attach OAI
+        DefaultCacheBehavior:
+          TargetOriginId: andrewdavis-crc-website
+          ViewerProtocolPolicy: 'redirect-to-https'
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 #CachingOptimized
+          AllowedMethods: # Define allowed HTTP methods
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+          CachedMethods: # Define cached HTTP methods
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: 'none'
+        ViewerCertificate:
+          AcmCertificateArn: 'arn:aws:acm:us-east-1:730335607039:certificate/f2df769b-9b2c-47f3-b31b-74ed41fc610c'
+          MinimumProtocolVersion: TLSv1.2_2021
+          SslSupportMethod: 'sni-only'
+        HttpVersion: 'http2'
+        Aliases:
+          - www.andrewdavis.link
+          - andrewdavis.link
+
+  # Restrict the S3 bucket policy to only allow access from CloudFront
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: andrewdavis-crc-website # Name of your S3 bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${CloudFrontOriginAccessIdentity}'
+            Action: 's3:GetObject'
+            Resource: !Sub 'arn:aws:s3:::andrewdavis-crc-website/*'
+
+  # Route 53 Record Set for root domain
+  WebsiteAliasRecord:
+    Type: 'AWS::Route53::RecordSet'
+    Properties:
+      HostedZoneId: 'Z05488053ORROGX0KIWSR' # My Hosted Zone ID
+      Name: 'andrewdavis.link.'
+      Type: 'A'
+      AliasTarget:
+        DNSName: !GetAtt WebsiteDistribution.DomainName
+        HostedZoneId: 'Z2FDTNDATAQYW2'  # CloudFront hosted zone ID for all distributions
+
+  # Route 53 Record Set for www subdomain
+  WwwAliasRecord:
+    Type: 'AWS::Route53::RecordSet'
+    Properties:
+      HostedZoneId: 'Z05488053ORROGX0KIWSR' # My Hosted Zone ID
+      Name: 'www.andrewdavis.link.'
+      Type: 'A'
+      AliasTarget:
+        DNSName: !GetAtt WebsiteDistribution.DomainName
+        HostedZoneId: 'Z2FDTNDATAQYW2'  # CloudFront hosted zone ID for all distributions
+
+
+#
+#
+##################################################################################################
+# create api and lambda
+##################################################################################################
+  # Define a Serverless API resource with CORS configuration and StageName
+  MyApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: MyApi
+      StageName: Prod  # Specify the stage name (e.g., Prod, Dev)
+      Cors:
+        AllowMethods: "'GET,PUT,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"  # Allow all origins - the lanbda will filter for any subdomain under andrewdavis.link, including root and www
+
+  # Lambda function for the Hello World endpoint
+  HelloWorldFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello_world/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Architectures:
+        - x86_64
+      Events:
+        HelloWorld:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi  # Reference the API with CORS
+            Path: /hello
+            Method: get
+
+  # Lambda function for GET requests to view count
+  GetViewCountFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: cloud-resume-challenge
+      CodeUri: get_viewcount/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Architectures:
+        - x86_64
+      Events:
+        ViewCountApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi  # Reference the API with CORS
+            Path: /viewcount
+            Method: get
+
+  # Lambda function for PUT requests to update count
+  PutViewCountFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: cloud-resume-challenge
+      CodeUri: updatecount/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Architectures:
+        - x86_64
+      Events:
+        UpdateCountApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi  # Reference the API with CORS
+            Path: /updatecount
+            Method: put
+
+Outputs:
+  # Outputs for APIs
+  HelloWorldApi:
+    Description: "API Gateway endpoint URL for Prod stage for Hello World function"
+    Value: !Sub "https://${MyApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/hello/"
+  
+  ViewCountApi:
+    Description: "API Gateway endpoint URL for Prod stage for View Count function"
+    Value: !Sub "https://${MyApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/viewcount"
+  
+  UpdateCountApi:
+    Description: "API Gateway endpoint URL for Prod stage for Update Count function"
+    Value: !Sub "https://${MyApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/updatecount"
+
+  HelloWorldFunction:
+    Description: "Hello World Lambda Function ARN"
+    Value: !GetAtt HelloWorldFunction.Arn
+
+  GetViewCountFunction:
+    Description: "Get View Count Lambda Function ARN"
+    Value: !GetAtt GetViewCountFunction.Arn
+
+  PutViewCountFunction:
+    Description: "Put View Count Lambda Function ARN"
+    Value: !GetAtt PutViewCountFunction.Arn
+
+
+
+
+
